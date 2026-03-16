@@ -70,7 +70,8 @@ jobs:
               echo "Repository exists, updating..."
               cd ${{ env.DEPLOY_PATH }}
               git remote set-url origin "$REPO_URL"
-              git fetch origin ${{ github.ref_name }}
+              git fetch --tags origin
+              git fetch origin ${{ github.ref_name }} || true
               git reset --hard origin/${{ github.ref_name }} 2>/dev/null || git reset --hard ${{ github.ref_name }}
             elif [ -d "${{ env.DEPLOY_PATH }}" ]; then
               echo "Directory exists but not a git repo, initializing..."
