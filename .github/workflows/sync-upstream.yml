@@ -100,6 +100,7 @@ jobs:
         if: steps.check.outputs.new_commits != '0'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           BRANCH_NAME="${{ steps.branch_check.outputs.branch_name }}"
           BRANCH_EXISTS="${{ steps.branch_check.outputs.branch_exists }}"
@@ -137,12 +138,26 @@ jobs:
             BODY="## Upstream Sync\n\nThis PR merges changes from [esng-one/instacrud-proto](https://github.com/esng-one/instacrud-proto) up to commit \`${UPSTREAM_SHA}\`.\n\nNo conflicts detected — safe to review and merge."
           fi
 
-          if ! gh pr create \
-            --title "$TITLE" \
-            --body "$(printf '%b' "$BODY")" \
-            --base main \
-            --head "$BRANCH_NAME"; then
-            echo "::warning::Unable to create PR with current token (Resource not accessible by integration)."
-            echo "::warning::Push succeeded. Create the PR manually, or set repository secret GH_PAT with repo scope."
+          create_pr() {
+            gh pr create \
+              --title "$TITLE" \
+              --body "$(printf '%b' "$BODY")" \
+              --base main \
+              --head "$BRANCH_NAME"
+          }
+
+          if ! create_pr; then
+            echo "::warning::Unable to create PR with github.token (Resource not accessible by integration)."
+
+            if [ -n "$GH_PAT" ]; then
+              echo "Retrying PR creation with GH_PAT..."
+              if GH_TOKEN="$GH_PAT" create_pr; then
+                echo "::notice::PR created successfully using GH_PAT."
+                exit 0
+              fi
+              echo "::warning::Retry with GH_PAT failed as well."
+            fi
+
+            echo "::warning::Push succeeded. Create the PR manually, or set/verify repository secret GH_PAT with repo scope."
             echo "::notice::Compare URL: https://github.com/${{ github.repository }}/compare/main...${BRANCH_NAME}?expand=1"
           fi
