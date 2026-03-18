@@ -1,4 +1,4 @@
-name: Sync Upstream
+name: Sync Upstream (InstaCRUD)
 
 on:
   workflow_dispatch:
