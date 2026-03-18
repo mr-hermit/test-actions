@@ -112,8 +112,12 @@ jobs:
             BODY="## Upstream Sync\n\nThis PR merges changes from [esng-one/instacrud-proto](https://github.com/esng-one/instacrud-proto) up to commit \`${UPSTREAM_SHA}\`.\n\nNo conflicts detected — safe to review and merge."
           fi
 
-          gh pr create \
+          if ! gh pr create \
             --title "$TITLE" \
             --body "$(printf '%b' "$BODY")" \
             --base main \
-            --head "$BRANCH_NAME"
+            --head "$BRANCH_NAME"; then
+            echo "::warning::Unable to create PR with current token (Resource not accessible by integration)."
+            echo "::warning::Push succeeded. Create the PR manually, or set repository secret GH_PAT with repo scope."
+            echo "::notice::Compare URL: https://github.com/${{ github.repository }}/compare/main...${BRANCH_NAME}?expand=1"
+          fi
