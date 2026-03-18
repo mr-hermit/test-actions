@@ -63,10 +63,15 @@ jobs:
           BRANCH_NAME="${{ steps.branch_check.outputs.branch_name }}"
           git checkout -b "$BRANCH_NAME"
 
-          if git merge upstream/main --no-edit --no-commit --allow-unrelated-histories; then
-            # Keep local GitHub Actions workflows; do not sync them from upstream.
-            git checkout --ours .github/workflows 2>/dev/null || true
+          # Keep local GitHub Actions workflows exactly as-is.
+          preserve_local_workflows() {
+            git restore --source=HEAD --staged --worktree .github/workflows 2>/dev/null || true
+            git checkout --ours -- .github/workflows 2>/dev/null || true
             git add .github/workflows 2>/dev/null || true
+          }
+
+          if git merge upstream/main --no-edit --no-commit --allow-unrelated-histories; then
+            preserve_local_workflows
 
             if ! git diff --cached --quiet; then
               git commit -m "chore: merge upstream/main"
@@ -77,9 +82,7 @@ jobs:
           else
             echo "Merge conflicts detected — staging files with conflict markers."
 
-            # Keep local GitHub Actions workflows even when merge conflicts occur.
-            git checkout --ours .github/workflows 2>/dev/null || true
-            git add .github/workflows 2>/dev/null || true
+            preserve_local_workflows
 
             git add -A
             if ! git diff --cached --quiet; then
