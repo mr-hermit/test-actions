@@ -96,16 +96,38 @@ jobs:
 
           git push origin "$BRANCH_NAME"
 
-      - name: Create Pull Request
-        if: >
-          steps.check.outputs.new_commits != '0' &&
-          steps.branch_check.outputs.branch_exists == 'false'
+      - name: Ensure Pull Request Exists
+        if: steps.check.outputs.new_commits != '0'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           BRANCH_NAME="${{ steps.branch_check.outputs.branch_name }}"
+          BRANCH_EXISTS="${{ steps.branch_check.outputs.branch_exists }}"
           HAS_CONFLICTS="${{ steps.merge.outputs.has_conflicts }}"
           UPSTREAM_SHA="${{ steps.check.outputs.upstream_sha }}"
+
+          EXISTING_PR_URL=$(gh pr list \
+            --state open \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --json url \
+            --jq '.[0].url')
+
+          if [ -n "$EXISTING_PR_URL" ]; then
+            echo "PR already exists: $EXISTING_PR_URL"
+            echo "::notice::Existing PR: $EXISTING_PR_URL"
+            exit 0
+          fi
+
+          if [ "$BRANCH_EXISTS" = "true" ] && [ -z "$HAS_CONFLICTS" ]; then
+            # Infer conflict state from the latest merge commit message on the remote sync branch.
+            git fetch origin "$BRANCH_NAME"
+            if git show -s --format=%B "origin/$BRANCH_NAME" | grep -q "conflicts require manual resolution"; then
+              HAS_CONFLICTS="true"
+            else
+              HAS_CONFLICTS="false"
+            fi
+          fi
 
           if [ "$HAS_CONFLICTS" = "true" ]; then
             TITLE="chore: sync upstream ${UPSTREAM_SHA} ($(date +%Y-%m-%d)) — merge conflicts need resolution"
