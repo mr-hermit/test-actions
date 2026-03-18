@@ -1,0 +1,117 @@
+name: Sync Upstream
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+      workflows: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/esng-one/instacrud.git
+          git fetch upstream
+
+      - name: Check for new upstream commits
+        id: check
+        run: |
+          COUNT=$(git rev-list --count HEAD..upstream/main)
+          UPSTREAM_SHA=$(git rev-parse --short upstream/main)
+          echo "new_commits=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" -eq "0" ]; then
+            echo "Already up to date with upstream. Nothing to do."
+          else
+            echo "Found $COUNT new commit(s) from upstream (tip: $UPSTREAM_SHA)."
+          fi
+
+      - name: Check if sync branch already exists
+        if: steps.check.outputs.new_commits != '0'
+        id: branch_check
+        run: |
+          BRANCH_NAME="upstream/merge-$(date +%Y-%m-%d)"
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME" > /dev/null 2>&1; then
+            echo "branch_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Branch $BRANCH_NAME already exists — skipping."
+          else
+            echo "branch_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create sync branch and merge upstream
+        if: >
+          steps.check.outputs.new_commits != '0' &&
+          steps.branch_check.outputs.branch_exists == 'false'
+        id: merge
+        run: |
+          BRANCH_NAME="${{ steps.branch_check.outputs.branch_name }}"
+          git checkout -b "$BRANCH_NAME"
+
+          if git merge upstream/main --no-edit --no-commit --allow-unrelated-histories; then
+            # Keep local GitHub Actions workflows; do not sync them from upstream.
+            git checkout --ours .github/workflows 2>/dev/null || true
+            git add .github/workflows 2>/dev/null || true
+
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: merge upstream/main"
+            fi
+
+            echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
+            echo "Merge completed with no conflicts."
+          else
+            echo "Merge conflicts detected — staging files with conflict markers."
+
+            # Keep local GitHub Actions workflows even when merge conflicts occur.
+            git checkout --ours .github/workflows 2>/dev/null || true
+            git add .github/workflows 2>/dev/null || true
+
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: merge upstream/main — conflicts require manual resolution"
+            fi
+            echo "has_conflicts=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          git push origin "$BRANCH_NAME"
+
+      - name: Create Pull Request
+        if: >
+          steps.check.outputs.new_commits != '0' &&
+          steps.branch_check.outputs.branch_exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          BRANCH_NAME="${{ steps.branch_check.outputs.branch_name }}"
+          HAS_CONFLICTS="${{ steps.merge.outputs.has_conflicts }}"
+          UPSTREAM_SHA="${{ steps.check.outputs.upstream_sha }}"
+
+          if [ "$HAS_CONFLICTS" = "true" ]; then
+            TITLE="chore: sync upstream ${UPSTREAM_SHA} ($(date +%Y-%m-%d)) — merge conflicts need resolution"
+            BODY="## Upstream Sync\n\nThis PR merges changes from [esng-one/instacrud-proto](https://github.com/esng-one/instacrud-proto) up to commit \`${UPSTREAM_SHA}\`.\n\n> ⚠️ **Merge conflicts detected.** The commit on this branch contains conflict markers — resolve them before merging.\n\n### Steps to resolve\n\`\`\`bash\ngit fetch origin\ngit checkout ${BRANCH_NAME}\n# Edit files containing <<<<<<< / ======= / >>>>>>>\ngit add .\ngit commit -m \"chore: resolve upstream merge conflicts\"\ngit push origin ${BRANCH_NAME}\n\`\`\`"
+          else
+            TITLE="chore: sync upstream ${UPSTREAM_SHA} ($(date +%Y-%m-%d))"
+            BODY="## Upstream Sync\n\nThis PR merges changes from [esng-one/instacrud-proto](https://github.com/esng-one/instacrud-proto) up to commit \`${UPSTREAM_SHA}\`.\n\nNo conflicts detected — safe to review and merge."
+          fi
+
+          gh pr create \
+            --title "$TITLE" \
+            --body "$(printf '%b' "$BODY")" \
+            --base main \
+            --head "$BRANCH_NAME"
